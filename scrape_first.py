@@ -24,8 +24,8 @@ from selenium.common.exceptions import NoSuchElementException
 
 searchTerms = r'Test'
 url = r'http://databases.uba.uva.nl/db/831'
-username = "11273879"
-password = "Yes8eN5huni!"
+username = "<<UvANet ID>>"
+password = "<<UvANet Password>>"
 root = r'~/capstone-article-data'
 path_to_chromedriver = r'./media_frames_corpus/chromedriver'
 download_folder = r'./download'
