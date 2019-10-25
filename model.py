@@ -6,6 +6,7 @@ import itertools
 import json
 import sys
 import pickle
+import sklearn
 from collections import namedtuple
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
@@ -14,15 +15,33 @@ from nltk.corpus import wordnet
 from string import punctuation
 from collections import Counter
 from math import log
+import matplotlib as plt
 from stanford_nlp import StanfordNLP
 from sklearn.cluster import KMeans
+from yellowbrick.cluster import KElbowVisualizer
+from sklearn.cluster import KMeans
+from sklearn import metrics
+from sklearn.preprocessing import normalize
+from scipy.spatial.distance import cdist
+import numpy as np
+import matplotlib.pyplot as plt
+from cluster_metric_visualizers import ClusterScoreVisualizers
 
-start = time.time()
-
+# UNCOMMENT TO DOWNLOAD NECESSARY NLTK-PACKAGES
 # nltk.download('averaged_perceptron_tagger')
 # nltk.download('maxent_ne_chunker')
 # nltk.download('words')
 # nltk.download('wordnet')
+
+start = time.time()
+
+USE_CACHED_TFIDF = True
+USE_CACHED_PREPROCESSING = USE_CACHED_TFIDF or True
+
+# File paths
+PRE_PROCESSING_CACHE_PATH = "model_cache/preprocessing_cache.pkl"
+TF_IDF_CACHE_PATH = "model_cache/tfidf_cache.pkl"
+DATA_PATH = './data.json'
 
 # Storing WordNet POS-tags locally improves performance
 ADJ = wordnet.ADJ
@@ -30,12 +49,25 @@ VERB = wordnet.VERB
 NOUN = wordnet.NOUN
 ADV = wordnet.ADV
 
-USE_CACHED_PREPROCESSING = True
-
-lemmatizer = WordNetLemmatizer()
+print("Connecting to Stanford CoreNLP server...")
 sf_nlp = StanfordNLP()
 
-DATA_PATH = './data.json'
+lemmatizer = WordNetLemmatizer()
+
+
+def load_articles():
+    with open(DATA_PATH) as json_file:
+        raw_data = json.load(json_file)
+
+    docs = [{"title": article["content"]["title"],
+             "publication": article["mfc_annotation"]["source"],
+             "year": article["mfc_annotation"]["year"],
+             "body": article["content"]["body"]}
+            for article in raw_data
+            if article["status"] == "VALID"
+            and not article["mfc_annotation"]["irrelevant"]]
+
+    return docs
 
 # Converts TreeBank POS-tag to WordNet tag
 def get_wordnet_pos(treebank_tag):
@@ -110,6 +142,36 @@ def get_doc_frequencies(word_frequencies):
     return counter
 
 
+def filter_doc_frequencies(doc_frequencies):
+    in_no_docs = Counter()
+
+    for doc in doc_frequencies:
+        for word in doc:
+            if doc[word] > 0:
+                in_no_docs[word] += 1
+
+    no_docs = len(doc_frequencies)
+    min_docs = 5
+    max_docs = round(0.4 * no_docs) # 40% of documents
+
+    filtered_words = []
+
+    for word in in_no_docs:
+        if in_no_docs[word] >= min_docs and in_no_docs[word] < max_docs:
+            filtered_words.append(word)
+
+    f_doc_frequencies = []
+
+    for doc in doc_frequencies:
+        filtered_doc_frequency = Counter()
+        for word in filtered_words:
+            if word in doc:
+                filtered_doc_frequency[word] = doc[word]
+        f_doc_frequencies.append(filtered_doc_frequency)
+
+    return f_doc_frequencies
+
+
 def tf_idf(doc_frequency, total_frequencies, N):
     tf_idf_for_word = {}
 
@@ -133,12 +195,15 @@ def tf_idf_matrix_entry(doc_frequency, total_frequencies, N):
 
         df = total_frequencies[word]
 
-        doc_tf_idf.append(tf * log(N/float(df)))
+        if df > 0:
+            doc_tf_idf.append(tf * log(N/float(df)))
+        else:
+            doc_tf_idf.append(0)
 
     return doc_tf_idf
 
-
-preprocessing_steps = [
+pre_processing_steps = [
+    ("Strip punctuation", strip_punctuation),
     ("POS-tag", sf_nlp.pos),
     # ("Remove named-entities", remove_named_entities),
     ("Convert POS-tags to WordNet", convert_pos_tags_wordnet),
@@ -158,11 +223,10 @@ class TransformerError(Exception):
 def prepare(data):
     updating_data = data
 
-    for (name, transformer) in preprocessing_steps:
+    for (name, transformer) in pre_processing_steps:
         print("-> " + name)
 
         new_data = []
-        start = time.time()
         doc_cnt = 0
 
         for doc in updating_data:
@@ -196,64 +260,74 @@ def prepare(data):
     return new_data
 
 
-def prepare_sf(data):
-    MODELS_DIR = './models/'
-    stanfordnlp.download('en', MODELS_DIR)
-    nlp = stanfordnlp.Pipeline(processors='tokenize,pos',
-                               models_dir=MODELS_DIR,
-                               treebank='en_ewt',
-                               use_gpu=True,
-                               pos_batch_size=3000)
-
-    for doc in data:
-        for part in ["title", "body"]:
-            sf_doc = nlp(doc[part])
-
-
-if USE_CACHED_PREPROCESSING:
-    print("Loading cached preprocessed docs...")
-    with open('preprocessing_cache.pkl', 'rb') as pp_cache_file:
-        prepped_docs = pickle.load(pp_cache_file)
+if USE_CACHED_TFIDF:
+    print("Loading cached TF-IDF matrix...")
+    with open(TF_IDF_CACHE_PATH, 'rb') as tfidf_cache_file:
+        tf_idf_mat = pickle.load(tfidf_cache_file)
 else:
-    print("Loading dataset...")
+    if USE_CACHED_PREPROCESSING:
+        print("Loading cached preprocessed docs...")
+        with open(PRE_PROCESSING_CACHE_PATH, 'rb') as pp_cache_file:
+            prepped_docs = pickle.load(pp_cache_file)
+    else:
+        print("Loading dataset...")
 
-    with open(DATA_PATH) as json_file:
-        raw_data = json.load(json_file)
+        docs = load_articles()
 
-    docs = [{"title": article["content"]["title"],
-             "publication": article["mfc_annotation"]["source"],
-             "year": article["mfc_annotation"]["year"],
-             "body": article["content"]["body"]}
-            for article in raw_data
-            if article["status"] == "VALID"
-            and not article["mfc_annotation"]["irrelevant"]]
+        print("Loaded {} articles!".format(len(docs)))
 
-    print("Loaded {} articles!".format(len(docs)))
+        print("Starting text-cleanup:")
 
-    print("Starting preparation of %i docs:" % len(docs))
+        start_pp = time.time()
 
-    start_pp = time.time()
-    prepped_docs = prepare(docs)
-    time_pp = str(round(time.time() - start_pp, 2))
+        prepped_docs = prepare(docs)
 
-    print("Finished preparation in {} sec!".format(time_pp))
+        time_pp = str(round(time.time() - start_pp, 2))
 
-    with open('preprocessing_cache.pkl', 'wb') as pp_cache_file:
-        pickle.dump(prepped_docs, pp_cache_file)
+        print("Finished text-cleanup in {} sec!".format(time_pp))
 
-print("Calculating word and document frequencies.")
-doc_frequencies = [get_word_frequency(doc) for doc in prepped_docs]
-total_frequencies = get_doc_frequencies(doc_frequencies)
+        # Save pre-processing result to cache
+        with open(PRE_PROCESSING_CACHE_PATH, 'wb') as pp_cache_file:
+            pickle.dump(prepped_docs, pp_cache_file)
 
-start_tfidf = time.time()
+    print("Calculating word and document frequencies...")
 
-print("Calculating TF-IDF values for words in documents.")
-tf_idf_mat = [tf_idf_matrix_entry(word_frequency, total_frequencies, len(doc_frequencies)) for word_frequency in doc_frequencies]
+    doc_frequencies = [get_word_frequency(doc) for doc in prepped_docs]
+    doc_frequencies = filter_doc_frequencies(doc_frequencies)
+    total_frequencies = get_doc_frequencies(doc_frequencies)
 
-time_tfidf = str(round(time.time() - start_tfidf, 2))
-print("Finished TF-IDF vectorization in {} sec.".format(time_tfidf))
+    print("Number of relevant words in corpus: {}".format(len(total_frequencies)))
+    print("Most common 10: ", total_frequencies.most_common(10))
 
-print("Performing K-means clustering with n={} clusters".format(2))
-kmeans = KMeans(n_clusters=5).fit(tf_idf_mat)
+    start_tfidf = time.time()
 
-print("Success! Finished in {} sec.".format(str(round(time.time() - start, 2))))
+    print("Calculating TF-IDF values for words in documents...")
+    tf_idf_mat = [tf_idf_matrix_entry(word_frequency, total_frequencies, len(doc_frequencies)) for word_frequency in doc_frequencies]
+    tf_idf_mat = np.matrix(tf_idf_mat)
+
+    # Save TF-IDF matrix to cache
+    with open(TF_IDF_CACHE_PATH, 'wb') as tfidf_cache_file:
+        pickle.dump(tf_idf_mat, tfidf_cache_file)
+
+    time_tfidf = str(round(time.time() - start_tfidf, 2))
+    print("Finished TF-IDF vectorization in {} sec.".format(time_tfidf))
+
+# Perform l2 normalization
+tf_idf_norm = normalize(tf_idf_mat, norm="l1")
+
+X = tf_idf_norm
+
+# UNCOMMENT TO SHOW K-MEANS ELBOW GRAPH
+# print("Visualizing K-means elbow...")
+# ClusterScoreVisualizers.k_means_elbow_graph(data=X, from_k=1, to_k=20)
+
+# UNCOMMENT TO SHOW SILLHOUETTE SCORE GRAPH
+print("Visualizing Silhouette-score graph...")
+ClusterScoreVisualizers.sillhouette_coefficient(data=X, from_k=2, to_k=20)
+
+k = 13
+
+print("Performing k-means clustering with k={} clusters...".format(k))
+
+k_means = KMeans(n_clusters=k)
+y_k_means = k_means.fit_predict(X)
