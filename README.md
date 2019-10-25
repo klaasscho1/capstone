@@ -33,13 +33,13 @@ extracts the title and body from them. JSON files containing these will be saved
 folder in the project root.
 
 ```sh
-$ python scraperunify_data_sources.py
+$ python scraper/unify_data_sources.py
 ```
 Takes the annotation data from the MFC, the scraping results, and the article contents, and combines them
 into one unified JSON file called `data.json`
 
 ### Model
 ```sh
-$ python model.py
+$ python model/model.py
 ```
 The main logic for vectorizing and clustering the article data.
