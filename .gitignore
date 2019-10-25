@@ -5,3 +5,4 @@ article-contents/
 __pycache__/
 results/
 .idea/
+model_cache/
