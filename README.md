@@ -3,9 +3,9 @@
 
 Topic: Predicting News Article Framing with Natural Language Processing
 
-### Scripts
+## Scripts
 
-**Scraper**
+### Scraper
 
 There are a number of scripts contained in this repository, used for retrieving and analysing 
 the articles from the Media Frames Corpus (MFC). Here are a few of them, highlighted:
@@ -38,7 +38,7 @@ $ python scraperunify_data_sources.py
 Takes the annotation data from the MFC, the scraping results, and the article contents, and combines them
 into one unified JSON file called `data.json`
 
-**Model**
+### Model
 ```sh
 $ python model.py
 ```
