@@ -1,31 +1,20 @@
 import nltk
 import time
-import pandas as pd
-import numpy as np
 import itertools
 import json
 import sys
 import pickle
-import sklearn
-from collections import namedtuple
-from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import wordnet
 from string import punctuation
 from collections import Counter
 from math import log
-import matplotlib as plt
-from stanford_nlp import StanfordNLP
+from model.stanford_nlp import StanfordNLP
 from sklearn.cluster import KMeans
-from yellowbrick.cluster import KElbowVisualizer
-from sklearn.cluster import KMeans
-from sklearn import metrics
 from sklearn.preprocessing import normalize
-from scipy.spatial.distance import cdist
 import numpy as np
-import matplotlib.pyplot as plt
-from cluster_metric_visualizers import ClusterScoreVisualizers
+from model.cluster_metric_visualizers import ClusterScoreVisualizers
 
 # UNCOMMENT TO DOWNLOAD NECESSARY NLTK-PACKAGES
 # nltk.download('averaged_perceptron_tagger')
