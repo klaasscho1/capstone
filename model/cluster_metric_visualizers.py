@@ -1,20 +1,25 @@
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.cluster import KMeans
+from scipy.spatial import distance
+
+
 class ClusterScoreVisualizers:
     @staticmethod
     def k_means_elbow_graph(data, from_k=1, to_k=20):
         # create new plot and data
         plt.plot()
         X = np.matrix(data)
-        colors = ['b', 'g', 'r']
-        markers = ['o', 'v', 's']
 
         # k means determine k
         distortions = []
         K = range(from_k, to_k + 1)
         for k in K:
             print("-> Calculating k={}...".format(k))
-            kmeanModel = KMeans(n_clusters=k)
-            kmeanModel.fit(X)
-            distortions.append(sum(np.min(cdist(X, kmeanModel.cluster_centers_, 'euclidean'), axis=1)) / X.shape[0])
+            kmeans_model = KMeans(n_clusters=k)
+            kmeans_model.fit(X)
+            distortions.append(sum(np.min(distance.cdist(X, kmeans_model.cluster_centers_, 'euclidean'), axis=1))
+                               / X.shape[0])
 
         print("-> Showing plot!")
         # Plot the elbow

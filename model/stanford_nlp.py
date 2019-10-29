@@ -10,7 +10,7 @@ import json
 class StanfordNLP:
     def __init__(self, host='http://localhost', port=9000):
         self.nlp = StanfordCoreNLP(host, port=port,
-                                   timeout=30000)  # , quiet=False, logging_level=logging.DEBUG)
+                                   timeout=50000)  # , quiet=False, logging_level=logging.DEBUG)
         self.props = {
             'annotators': 'tokenize,ssplit,pos,lemma,ner,parse,depparse,dcoref,relation',
             'pipelineLanguage': 'en',
@@ -34,6 +34,9 @@ class StanfordNLP:
 
     def annotate(self, sentence):
         return json.loads(self.nlp.annotate(sentence, properties=self.props))
+
+    def true_case(self, sentence):
+        return self.annotate()
 
     @staticmethod
     def tokens_to_dict(_tokens):
