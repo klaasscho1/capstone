@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.cluster import KMeans
 from scipy.spatial import distance
+import sklearn
 
 
 class ClusterScoreVisualizers:

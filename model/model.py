@@ -7,6 +7,7 @@ import truecase
 import argparse
 import _pickle as cPickle
 import numpy as np
+import matplotlib.pyplot as plt
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from sklearn.cluster import KMeans
@@ -18,13 +19,16 @@ from math import log
 from stanford_nlp import StanfordNLP
 from transformer import Transformer, TransformerStep
 from cluster_metric_visualizers import ClusterScoreVisualizers
-import truecaser.Truecaser as tc
 from nltk.tokenize.treebank import TreebankWordTokenizer, TreebankWordDetokenizer
-from nltk.tag import StanfordNERTagger
+
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-t', action='store_true')
-parser.add_argument('-p', action='store_true')
+parser.add_argument('-c', action='store_true')  # Use cached everything
+parser.add_argument('-t', action='store_true')  # Use cached TF-IDF matrix
+parser.add_argument('-p', action='store_true')  # Use cached pre-processed data
+parser.add_argument('-k', action='store_true')  # Use cached K-means clustering data
+parser.add_argument('-s', action='store_true')  # Visualize silhouette score for k-clusters
+parser.add_argument('-e', action='store_true')  # Visualize elbow graph for k-clusters
 
 options = parser.parse_args()
 
@@ -36,12 +40,14 @@ options = parser.parse_args()
 
 start = time.time()
 
-USE_CACHED_TFIDF = options.t
+USE_CACHED_TFIDF = options.t or options.c
 USE_CACHED_PREPROCESSING = USE_CACHED_TFIDF or options.p
+USE_CACHED_K_MEANS = options.c or options.k
 
 # File paths
 PRE_PROCESSING_CACHE_PATH = "model_cache/preprocessing_cache.pkl"
 TF_IDF_CACHE_PATH = "model_cache/tfidf_cache.pkl"
+K_MEANS_CACHE_PATH = "model_cache/k_means_cache.pkl"
 DATA_PATH = 'data.json'
 
 # Storing WordNet POS-tags locally improves performance
@@ -96,9 +102,10 @@ def strip_punctuation(s: str) -> str:
     return ''.join(c for c in s if c not in punctuation)
 
 
-# Removes punctuation characters from a list of tokens
+# Removes tokens with only punctuation characters from a list of tokens
 def remove_punctuation_tokens(pos_tokens: [(str, str)]) -> [(str, str)]:
-    return [(s, pos) for (s, pos) in pos_tokens if s not in punctuation]
+    return [(s, pos) for (s, pos) in pos_tokens
+            if not all(c in punctuation for c in s)]
 
 
 # Converts all TreeBank POS-tags in a list to WordNet tags
@@ -261,7 +268,7 @@ transforming_steps = [
 if USE_CACHED_TFIDF:
     print("Loading cached TF-IDF matrix...")
     with open(TF_IDF_CACHE_PATH, 'rb') as tfidf_cache_file:
-        tf_idf_mat = pickle.load(tfidf_cache_file)
+        (words, tf_idf_mat) = pickle.load(tfidf_cache_file)
 else:
     # Load pre-processed data from cache, or process it first
     if USE_CACHED_PREPROCESSING:
@@ -281,6 +288,8 @@ else:
     doc_frequencies = filter_doc_frequencies(doc_frequencies)
     total_frequencies = get_doc_frequencies(doc_frequencies)
 
+    words = list(total_frequencies.keys())
+
     print("Number of relevant words in corpus: {}".format(len(total_frequencies)))
     print("Most common 10: ", total_frequencies.most_common(10))
 
@@ -293,29 +302,52 @@ else:
 
     # Save TF-IDF matrix to cache
     with open(TF_IDF_CACHE_PATH, 'wb') as tfidf_cache_file:
-        pickle.dump(tf_idf_mat, tfidf_cache_file)
+        pickle.dump((words, tf_idf_mat), tfidf_cache_file)
 
     time_tfidf = str(round(time.time() - start_tfidf, 2))
     print("Finished TF-IDF vectorization in {} sec.".format(time_tfidf))
 
-# Perform l2 normalization
+# Perform normalization
 tf_idf_norm = normalize(tf_idf_mat, norm="l2")
 
 X = tf_idf_norm
 
-# UNCOMMENT TO SHOW K-MEANS ELBOW GRAPH
-print("Visualizing K-means elbow...")
-ClusterScoreVisualizers.k_means_elbow_graph(data=X, from_k=1, to_k=20)
+if options.e:
+    print("Visualizing K-means elbow...")
+    ClusterScoreVisualizers.k_means_elbow_graph(data=X, from_k=1, to_k=30)
 
-# UNCOMMENT TO SHOW SILHOUETTE SCORE GRAPH
-# print("Visualizing Silhouette-score graph...")
-# ClusterScoreVisualizers.sillhouette_coefficient(data=X, from_k=2, to_k=20)
+if options.s:
+    print("Visualizing Silhouette-score graph...")
+    ClusterScoreVisualizers.sillhouette_coefficient(data=X, from_k=2, to_k=30)
 
-k = 8
+if USE_CACHED_K_MEANS:
+    print("Loading cached k-means matrix...")
+    with open(K_MEANS_CACHE_PATH, 'rb') as k_means_cache_file:
+        k_means = pickle.load(k_means_cache_file)
+else:
+    print("Performing k-means clustering with k={} clusters...".format(k))
 
-# print("Performing k-means clustering with k={} clusters...".format(k))
+    k = 10
 
-# k_means = KMeans(n_clusters=k)
-# y_k_means = k_means.fit_predict(X)
+    k_means = KMeans(n_clusters=k)
+    k_means.fit(X)
 
-print("Finished!")
+    # Save k-means clustering to cache
+    with open(K_MEANS_CACHE_PATH, 'wb') as k_means_cache_file:
+        pickle.dump(k_means, k_means_cache_file)
+
+y_k_means = k_means.predict(X)
+
+cluster_sizes = Counter(y_k_means)
+
+print("Main terms per cluster")
+order_centroids = k_means.cluster_centers_.argsort()[:, ::-1]
+words_per_cluster = 10
+
+for i in range(k):
+    print("")
+    print("Cluster {} (N={}):".format(i, cluster_sizes[i]))
+
+    for ind in order_centroids[i, :words_per_cluster]:
+        print(words[ind])
+
