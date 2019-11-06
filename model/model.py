@@ -21,7 +21,6 @@ from transformer import Transformer, TransformerStep
 from cluster_metric_visualizers import ClusterScoreVisualizers
 from nltk.tokenize.treebank import TreebankWordTokenizer, TreebankWordDetokenizer
 
-
 parser = argparse.ArgumentParser()
 parser.add_argument('-c', action='store_true')  # Use cached everything
 parser.add_argument('-t', action='store_true')  # Use cached TF-IDF matrix
@@ -64,21 +63,38 @@ tokenizer = TreebankWordTokenizer()
 detokenizer = TreebankWordDetokenizer()
 
 
-def _step(name, transformation, keys=["title", "body"]):
+def _step(name, transformation, keys=None):
+    if keys is None:
+        keys = ["title", "lead", "body"]
     return TransformerStep(name=name, transformer=transformation, keys=keys)
+
+
+def get_paragraphs(text: str) -> [str]:
+    return [p for p in text.split("\n") if p.strip() != ""]
+
+
+def index_or_default(arr, ind, default):
+    try:
+        return arr[ind]
+    except IndexError:
+        return default
 
 
 def load_articles():
     with open(DATA_PATH) as json_file:
         raw_data = json.load(json_file)
 
-    _docs = [{"title": article["content"]["title"],
-              "publication": article["mfc_annotation"]["source"],
-              "year": article["mfc_annotation"]["year"],
-              "body": article["content"]["body"]}
-             for article in raw_data
-             if article["status"] == "VALID"
-             and not article["mfc_annotation"]["irrelevant"]]
+    _docs = [{"original_article": _article,
+              "title": _article["content"]["title"],
+              "publication": _article["mfc_annotation"]["source"],
+              "year": _article["mfc_annotation"]["year"],
+              "lead": get_paragraphs(_article["content"]["body"])[0]
+              if len(get_paragraphs(_article["content"]["body"])) >= 1 else "",
+              "body": " ".join(get_paragraphs(_article["content"]["body"])[1:])
+              if len(get_paragraphs(_article["content"]["body"])) > 1 else ""}
+             for _article in raw_data
+             if _article["status"] == "VALID"
+             and not _article["mfc_annotation"]["irrelevant"]]
 
     return _docs
 
@@ -154,25 +170,27 @@ def remove_named_entities_stf(s: str) -> [str]:
     return [s for (s, tag) in tagged_strs if tag not in ["PERSON", "ORGANIZATION", "COUNTRY"]]
 
 
-def pre_process_data(data=load_articles()):
+def pre_process_data(data=None):
+    if data is None:
+        data = load_articles()
     print("Starting pre-processing:")
 
     start_pp = time.time()
 
-    prepped_data = Transformer.transform(data, transforming_steps)
+    _prepped_data = Transformer.transform(data, transforming_steps)
 
     time_pp = str(round(time.time() - start_pp, 2))
 
     print("Finished pre-processing in {} sec!".format(time_pp))
 
-    return prepped_data
+    return _prepped_data
 
 
 def get_word_frequency(doc):
     counter = Counter()
 
     # Count words from title double
-    for (key, weight) in [("title", 2), ("body", 1)]:
+    for (key, weight) in [("title", 2), ("lead", 2), ("body", 1)]:
         for _ in itertools.repeat(None, weight):
             counter.update(doc[key])
 
@@ -201,7 +219,7 @@ def filter_doc_frequencies(document_frequencies):
     # Remove words that appear in less than 5,
     # or more than 40% of articles
     min_docs = 5
-    max_docs = round(0.4 * no_docs)
+    max_docs = round(1 * no_docs)
 
     filtered_words = []
 
@@ -262,26 +280,34 @@ transforming_steps = [
     _step("Filter only nouns, adjectives, adverbs", filter_pos),
     _step("Remove stopwords", remove_stopwords),
     _step("Remove numbers", remove_numbers),
-    _step("Lemmatize", lambda word_pos: [lemmatizer.lemmatize(word, pos) for (word, pos) in word_pos])
+    _step("Lemmatize", lambda word_pos: [(lemmatizer.lemmatize(word, pos), pos) for (word, pos) in word_pos]),
+    _step("Merge tokens and POS", lambda word_pos: ["{}-{}".format(token, pos) for (token, pos) in word_pos]),
 ]
+
+# Load pre-processed data from cache, or process it first
+if USE_CACHED_PREPROCESSING:
+    print("Loading cached preprocessed docs...")
+    with open(PRE_PROCESSING_CACHE_PATH, 'rb') as pp_cache_file:
+        prepped_data = pickle.load(pp_cache_file)
+else:
+    prepped_data = pre_process_data(data=load_articles())
+
+    print("Removing words not in title or lead from body")
+
+    for index, article in enumerate(prepped_data):
+        prepped_data[index]["body"] = [pos_token for pos_token in article["body"]
+                                       if pos_token in article["title"]
+                                       or pos_token in article["lead"]]
+
+    # Save pre-processing result to cache
+    with open(PRE_PROCESSING_CACHE_PATH, 'wb') as pp_cache_file:
+        pickle.dump(prepped_data, pp_cache_file)
 
 if USE_CACHED_TFIDF:
     print("Loading cached TF-IDF matrix...")
     with open(TF_IDF_CACHE_PATH, 'rb') as tfidf_cache_file:
         (words, tf_idf_mat) = pickle.load(tfidf_cache_file)
 else:
-    # Load pre-processed data from cache, or process it first
-    if USE_CACHED_PREPROCESSING:
-        print("Loading cached preprocessed docs...")
-        with open(PRE_PROCESSING_CACHE_PATH, 'rb') as pp_cache_file:
-            prepped_data = pickle.load(pp_cache_file)
-    else:
-        prepped_data = pre_process_data(data=load_articles())
-
-        # Save pre-processing result to cache
-        with open(PRE_PROCESSING_CACHE_PATH, 'wb') as pp_cache_file:
-            pickle.dump(prepped_data, pp_cache_file)
-
     print("Calculating word and document frequencies...")
 
     doc_frequencies = [get_word_frequency(doc) for doc in prepped_data]
@@ -320,14 +346,14 @@ if options.s:
     print("Visualizing Silhouette-score graph...")
     ClusterScoreVisualizers.sillhouette_coefficient(data=X, from_k=2, to_k=30)
 
+k = 10
+
 if USE_CACHED_K_MEANS:
     print("Loading cached k-means matrix...")
     with open(K_MEANS_CACHE_PATH, 'rb') as k_means_cache_file:
         k_means = pickle.load(k_means_cache_file)
 else:
     print("Performing k-means clustering with k={} clusters...".format(k))
-
-    k = 10
 
     k_means = KMeans(n_clusters=k)
     k_means.fit(X)
@@ -351,3 +377,6 @@ for i in range(k):
     for ind in order_centroids[i, :words_per_cluster]:
         print(words[ind])
 
+# PCA distance is preserved
+# MANIFOLD MDS
+# Framing definition

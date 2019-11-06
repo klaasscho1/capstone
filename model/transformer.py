@@ -7,8 +7,9 @@ TransformerStep = collections.namedtuple("TransformerStep", ["name", "transforme
 
 
 class TransformerError(Exception):
-    def __init__(self, exception):
+    def __init__(self, exception, part):
         self.exception = exception
+        self.part = part
     pass
 
 
@@ -45,11 +46,11 @@ class Transformer:
                             transformation_result = transformer(doc[part])
                             new_doc[part] = transformation_result
                         except Exception as e:
-                            raise TransformerError(exception=e)
+                            raise TransformerError(exception=e,part=part)
                 except TransformerError as e:
                     doc_cnt += 1
-                    print("Cannot perform '{}' on document #{} because of exception:"
-                          .format(name, doc_cnt))
+                    print("Cannot perform '{}' on document #{} ({}) because of exception:"
+                          .format(name, doc_cnt, part))
                     traceback.print_tb(e.exception.__traceback__)
                     continue
 
