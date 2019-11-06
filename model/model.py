@@ -340,7 +340,7 @@ X = tf_idf_norm
 
 if options.e:
     print("Visualizing K-means elbow...")
-    ClusterScoreVisualizers.k_means_elbow_graph(data=X, from_k=1, to_k=30)
+    ClusterScoreVisualizers.k_means_elbow_graph(data=X, from_k=1, to_k=20)
 
 if options.s:
     print("Visualizing Silhouette-score graph...")
