@@ -28,6 +28,7 @@ parser.add_argument('-p', action='store_true')  # Use cached pre-processed data
 parser.add_argument('-k', action='store_true')  # Use cached K-means clustering data
 parser.add_argument('-s', action='store_true')  # Visualize silhouette score for k-clusters
 parser.add_argument('-e', action='store_true')  # Visualize elbow graph for k-clusters
+parser.add_argument('-z', action='store_true')  # Use cached steps if available
 
 options = parser.parse_args()
 
@@ -42,11 +43,12 @@ start = time.time()
 USE_CACHED_TFIDF = options.t or options.c
 USE_CACHED_PREPROCESSING = USE_CACHED_TFIDF or options.p
 USE_CACHED_K_MEANS = options.c or options.k
+USE_CACHED_STEPS = options.c or options.z
 
 # File paths
-PRE_PROCESSING_CACHE_PATH = "model_cache/preprocessing_cache.pkl"
-TF_IDF_CACHE_PATH = "model_cache/tfidf_cache.pkl"
-K_MEANS_CACHE_PATH = "model_cache/k_means_cache.pkl"
+PRE_PROCESSING_CACHE_PATH = "model_cache/no_ner_6nov/preprocessing_cache.pkl"
+TF_IDF_CACHE_PATH = "model_cache/no_ner_6nov/tfidf_cache.pkl"
+K_MEANS_CACHE_PATH = "model_cache/no_ner_6nov/k_means_cache.pkl"
 DATA_PATH = 'data.json'
 
 # Storing WordNet POS-tags locally improves performance
@@ -70,7 +72,7 @@ def _step(name, transformation, keys=None):
 
 
 def get_paragraphs(text: str) -> [str]:
-    return [p for p in text.split("\n") if p.strip() != ""]
+    return [p for p in text.split("\n\n") if p.strip() != ""]
 
 
 def index_or_default(arr, ind, default):
@@ -270,9 +272,28 @@ def tf_idf_matrix_entry(doc_frequency, _total_frequencies, N):
     return doc_tf_idf
 
 
+
+def _has_cache(step, cache_id):
+    def caching_step(input):
+        step_cache
+
+    default_step = lambda x: step(x)
+    if USE_CACHED_STEPS:
+        step_cache_filename = "model_cache/steps/step_{}.pkl".format(cache_id)
+        try:
+            step_cache = open(step_cache_filename, "rb")
+            def _get_article_result_from_cache(article):
+                return
+        except:
+            return default_step
+
+    return default_step
+
+
 transforming_steps = [
     _step("Restore true case of titles", truecase.get_true_case, ["title"]),
-    _step("Filter named-entities (Stanford)", remove_named_entities_stf),
+    _step("Tokenize", nltk.tokenize.word_tokenize),
+    _has_cache(_step("Filter named-entities (Stanford)", remove_named_entities_stf), cache_id="ner"),
     _step("POS-tag", nltk.pos_tag),
     _step("Strip punctuation", remove_punctuation_tokens),
     _step("Convert POS-tags to WordNet", convert_pos_tags_wordnet),
@@ -368,15 +389,34 @@ cluster_sizes = Counter(y_k_means)
 
 print("Main terms per cluster")
 order_centroids = k_means.cluster_centers_.argsort()[:, ::-1]
-words_per_cluster = 10
+words_per_cluster = 5 # 1,2,3 stable?
+cluster_words = []
 
 for i in range(k):
     print("")
     print("Cluster {} (N={}):".format(i, cluster_sizes[i]))
+    cluster_word_arr = []
 
     for ind in order_centroids[i, :words_per_cluster]:
+        cluster_word_arr.append(words[ind])
         print(words[ind])
+
+    cluster_words.append(cluster_word_arr)
 
 # PCA distance is preserved
 # MANIFOLD MDS
 # Framing definition
+# Whitening?
+
+clustered_data = prepped_data.copy()
+
+for i, cluster in enumerate(y_k_means):
+    clustered_data[i].update(cluster_n=cluster)
+
+print("Finished!")
+
+# Play with model, systematically (keep note of changes)
+# Decide on the ones to change (no. clusters, doubling weight, )
+# See which clusters 'survive'
+# Record the results (titles, centroid distances, etc.)
+# 1 week for modelling

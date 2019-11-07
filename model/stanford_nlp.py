@@ -12,7 +12,7 @@ class StanfordNLP:
         self.nlp = StanfordCoreNLP(host, port=port,
                                    timeout=50000)  # , quiet=False, logging_level=logging.DEBUG)
         self.props = {
-            'annotators': 'tokenize,ssplit,pos,lemma,ner,parse,depparse,dcoref,relation',
+            'annotators': 'ner',
             'pipelineLanguage': 'en',
             'outputFormat': 'json'
         }
