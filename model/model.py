@@ -16,10 +16,14 @@ from nltk.corpus import wordnet
 from string import punctuation
 from collections import Counter
 from math import log
+from datetime import datetime
 from stanford_nlp import StanfordNLP
 from transformer import Transformer, TransformerStep
 from cluster_metric_visualizers import ClusterScoreVisualizers
 from nltk.tokenize.treebank import TreebankWordTokenizer, TreebankWordDetokenizer
+from whiten import whiten
+
+print("Preparing argument parser...")
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-c', action='store_true')  # Use cached everything
@@ -27,6 +31,7 @@ parser.add_argument('-t', action='store_true')  # Use cached TF-IDF matrix
 parser.add_argument('-p', action='store_true')  # Use cached pre-processed data
 parser.add_argument('-k', action='store_true')  # Use cached K-means clustering data
 parser.add_argument('-s', action='store_true')  # Visualize silhouette score for k-clusters
+parser.add_argument('-S', action='store_true')  # Save results after run
 parser.add_argument('-e', action='store_true')  # Visualize elbow graph for k-clusters
 parser.add_argument('-z', action='store_true')  # Use cached steps if available
 
@@ -44,6 +49,7 @@ USE_CACHED_TFIDF = options.t or options.c
 USE_CACHED_PREPROCESSING = USE_CACHED_TFIDF or options.p
 USE_CACHED_K_MEANS = options.c or options.k
 USE_CACHED_STEPS = options.c or options.z
+SAVE_RESULTS = True
 
 # File paths
 PRE_PROCESSING_CACHE_PATH = "model_cache/no_ner_6nov/preprocessing_cache.pkl"
@@ -192,7 +198,7 @@ def get_word_frequency(doc):
     counter = Counter()
 
     # Count words from title double
-    for (key, weight) in [("title", 2), ("lead", 2), ("body", 1)]:
+    for (key, weight) in [("title", 1), ("lead", 1), ("body", 1)]:
         for _ in itertools.repeat(None, weight):
             counter.update(doc[key])
 
@@ -221,7 +227,7 @@ def filter_doc_frequencies(document_frequencies):
     # Remove words that appear in less than 5,
     # or more than 40% of articles
     min_docs = 5
-    max_docs = round(1 * no_docs)
+    max_docs = round(0.5 * no_docs)
 
     filtered_words = []
 
@@ -272,29 +278,59 @@ def tf_idf_matrix_entry(doc_frequency, _total_frequencies, N):
     return doc_tf_idf
 
 
+cache_cache = {}
 
-def _has_cache(step, cache_id):
-    def caching_step(input):
-        step_cache
 
-    default_step = lambda x: step(x)
-    if USE_CACHED_STEPS:
-        step_cache_filename = "model_cache/steps/step_{}.pkl".format(cache_id)
+def _cache_step(name, step, cache_id):
+    step_cache_filename = "model_cache/steps/step_{}.pkl".format(cache_id)
+
+    if cache_id in cache_cache:
+        step_cache = cache_cache[cache_id]
+    else:
         try:
-            step_cache = open(step_cache_filename, "rb")
-            def _get_article_result_from_cache(article):
-                return
+            with open(step_cache_filename, "rb") as step_cache_file:
+                step_cache = pickle.load(step_cache_file)
+            cache_cache[cache_id] = step_cache
         except:
-            return default_step
+            step_cache = {}
+            cache_cache[cache_id] = step_cache
 
-    return default_step
+    def caching_step(_input):
+        result = step(_input)
+
+        if isinstance(_input, list):
+            input_key = tuple(_input)
+        else:
+            input_key = _input
+
+        step_cache[input_key] = result
+        cache_cache[cache_id] = step_cache
+        return result
+
+    if USE_CACHED_STEPS:
+        def cached_step(_input):
+            if isinstance(_input, list):
+                input_key = tuple(_input)
+            else:
+                input_key = _input
+
+            if input_key in step_cache:
+                cached_result = step_cache[input_key]
+                return cached_result
+            else:
+                print("No cached result for input, calculating result.")
+                return caching_step(_input)
+
+        return _step(name + " (from cache)", cached_step)
+    else:
+        return _step(name + " (caching)", caching_step)
 
 
 transforming_steps = [
     _step("Restore true case of titles", truecase.get_true_case, ["title"]),
-    _step("Tokenize", nltk.tokenize.word_tokenize),
-    _has_cache(_step("Filter named-entities (Stanford)", remove_named_entities_stf), cache_id="ner"),
-    _step("POS-tag", nltk.pos_tag),
+    #_step("Tokenize", nltk.word_tokenize),
+    _cache_step("Filter named-entities (Stanford)", remove_named_entities_stf, cache_id="ner"),
+    _cache_step("POS-tag", nltk.pos_tag, cache_id="pos"),
     _step("Strip punctuation", remove_punctuation_tokens),
     _step("Convert POS-tags to WordNet", convert_pos_tags_wordnet),
     _step("Lowercase", lambda sl: [(st.lower(), pos) for (st, pos) in sl]),
@@ -313,12 +349,17 @@ if USE_CACHED_PREPROCESSING:
 else:
     prepped_data = pre_process_data(data=load_articles())
 
-    print("Removing words not in title or lead from body")
+    #print("Removing words not in title or lead from body")
 
-    for index, article in enumerate(prepped_data):
-        prepped_data[index]["body"] = [pos_token for pos_token in article["body"]
-                                       if pos_token in article["title"]
-                                       or pos_token in article["lead"]]
+    #for index, article in enumerate(prepped_data):
+    #    prepped_data[index]["body"] = [pos_token for pos_token in article["body"]
+    #                                   if pos_token in article["title"]
+    #                                   or pos_token in article["lead"]]
+
+    for key in cache_cache.keys():
+        step_cache_filename = "model_cache/steps/step_{}.pkl".format(key)
+        with open(step_cache_filename, "wb") as step_cache_file:
+            pickle.dump(cache_cache[key], step_cache_file)
 
     # Save pre-processing result to cache
     with open(PRE_PROCESSING_CACHE_PATH, 'wb') as pp_cache_file:
@@ -354,8 +395,10 @@ else:
     time_tfidf = str(round(time.time() - start_tfidf, 2))
     print("Finished TF-IDF vectorization in {} sec.".format(time_tfidf))
 
-# Perform normalization
+# Perform normalization and whitening
+print("Normalizing data...")
 tf_idf_norm = normalize(tf_idf_mat, norm="l2")
+# tf_idf_whi = whiten(tf_idf_norm)
 
 X = tf_idf_norm
 
@@ -365,7 +408,7 @@ if options.e:
 
 if options.s:
     print("Visualizing Silhouette-score graph...")
-    ClusterScoreVisualizers.sillhouette_coefficient(data=X, from_k=2, to_k=30)
+    ClusterScoreVisualizers.sillhouette_coefficient(data=X, from_k=2, to_k=20)
 
 k = 10
 
@@ -412,6 +455,22 @@ clustered_data = prepped_data.copy()
 
 for i, cluster in enumerate(y_k_means):
     clustered_data[i].update(cluster_n=cluster)
+
+if SAVE_RESULTS:
+    now = datetime.now()
+    timestamp = now.strftime("%m%d%Y_%H-%M-%S")
+    print("Saving timestamped results (timestamp={})...".format(timestamp))
+
+    with open("results/clusters{}.pkl".format(timestamp), 'wb') as clustered_data_file:
+        pickle.dump(clustered_data, clustered_data_file)
+
+    with open("results/kmeans{}.pkl".format(timestamp), 'wb') as kmeans_file:
+        pickle.dump({
+            "model": k_means,
+            "k": k,
+            "X": X,
+            "y": y_k_means
+        }, kmeans_file)
 
 print("Finished!")
 
