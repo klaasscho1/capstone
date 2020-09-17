@@ -1,5 +1,5 @@
 # Capstone - Klaas Schoenmaker
-**Supervisor:** M.P.J. Repplinger, Universiteit van Amsterdam (mpjrepplinger@gmail.com)
+**Supervisor:** M.P.J. Repplinger, Universiteit van Amsterdam
 
 Topic: Predicting News Article Framing with Natural Language Processing
 
